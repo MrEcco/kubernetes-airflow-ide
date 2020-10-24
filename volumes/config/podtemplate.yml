@@ -1,0 +1,56 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  namespace: default
+  labels:
+    templated: 'True'
+spec:
+  affinity: {}
+  serviceAccount: default
+  restartPolicy: Never
+  containers:
+    - name: base
+      image: registry.dc/local/airflow:local
+      imagePullPolicy: Always
+      env:
+      - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+        value: postgresql+psycopg2://airflow:airflow@postgres.dc:5432/airflow
+      - name: AIRFLOW__CORE__FERNET_KEY
+        value: qykO1whjCf2vZQsfFevdfSf2eegO6ErT9pFqkx3kZdg=
+      - name: PYTHONPATH
+        value: /opt/airflow/dags
+      resources:
+        requests:
+          cpu: 100m
+          memory: 200Mi
+        limits:
+          cpu: 2000m
+          memory: 500Mi
+      volumeMounts:
+        - name: airflow-dags
+          mountPath: /opt/airflow/dags
+          readOnly: true
+        - name: airflow-logs
+          mountPath: /opt/airflow/logs
+        - name: config
+          mountPath: /opt/airflow/airflow.cfg
+          subPath: airflow.cfg
+      securityContext:
+        allowPrivilegeEscalation: false
+  securityContext:
+    runAsUser: 50000
+    fsGroup: 1000
+  volumes:
+  - name: airflow-dags
+    hostPath:
+      path: /mnt/kubernetes/dags
+      type: Directory
+  - name: airflow-logs
+    hostPath:
+      path: /mnt/kubernetes/logs
+      type: Directory
+  - name: config
+    hostPath:
+      path: /mnt/kubernetes/airflow-config
+      type: Directory
+  terminationGracePeriodSeconds: 3

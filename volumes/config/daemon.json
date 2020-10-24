@@ -1,0 +1,7 @@
+{
+    "insecure-registries": [
+        "registry",
+        "registry.dc",
+        "10.254.254.253"
+    ]
+}

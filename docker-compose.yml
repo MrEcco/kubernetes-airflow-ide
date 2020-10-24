@@ -1,0 +1,145 @@
+version: '3.6'
+
+x-airflow-image: &ref_airflow_image
+  image: local/airflow:local
+  build:
+    context: ./docker/airflow
+    dockerfile: Dockerfile
+    labels:
+      tld.local: local
+    network: host
+    args:
+      KUBERNETES_VERSION: 1.19.2
+x-airflow-common: &ref_airflow_common
+  stdin_open: true
+  entrypoint:
+  - "/usr/bin/dumb-init"
+  - "--"
+  environment:
+    AIRFLOW__CORE__FERNET_KEY: qykO1whjCf2vZQsfFevdfSf2eegO6ErT9pFqkx3kZdg=
+  volumes:
+  - ./dags:/opt/airflow/dags:ro
+  - ./volumes/logs:/opt/airflow/logs:rw
+  - ./volumes/config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+  - ./volumes/config/podtemplate.yml:/opt/airflow/podtemplate.yml:ro
+  - ./volumes/kubeconfig:/home/airflow/.kube/config:ro
+  stop_grace_period: 1s
+
+services:
+  postgres:
+    container_name: airflow-postgres
+    image: "postgres:12"
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_USER: airflow
+    volumes:
+    - postgres-airflow:/var/lib/postgresql/data
+    expose:
+    - 5432
+    restart: on-failure
+    stop_grace_period: 3s
+
+  dns:
+    container_name: airflow-dns
+    image: coredns/coredns:1.7.1
+    command:
+    - -conf
+    - /etc/Coredns
+    expose:
+      - "53/udp"
+    networks:
+      default:
+        ipv4_address: 10.254.254.254
+    volumes:
+    - "./volumes/dns/Corefile:/etc/Coredns:ro"
+    restart: on-failure
+    stop_grace_period: 1s
+
+  registry:
+    container_name: airflow-registry
+    image: registry:2.7.1
+    expose:
+    - "80"
+    networks:
+      default:
+        ipv4_address: 10.254.254.253
+    volumes:
+    - "./volumes/registry/config.yml:/etc/docker/registry/config.yml:ro"
+
+  kubernetes:
+    container_name: airflow-kubernetes
+    build:
+      context: ./docker/kind
+      dockerfile: Dockerfile
+      labels:
+        tld.local: local
+      network: host
+      args:
+        KUBERNETES_VERSION: 1.19.2
+        KIND_VERSION: 0.9.0
+    image: local/kind:local
+    privileged: true
+    entrypoint:
+    - sh
+    - -c
+    command:
+    - |
+      echo nameserver 10.254.254.254 > /etc/resolv.conf
+      exec dockerd-entrypoint.sh
+    ports:
+    - "6443:6443"
+    - "8008:30080"
+    dns:
+    - "10.254.254.254"
+    extra_hosts:
+    - "kubernetes:127.0.0.1"
+    volumes:
+    - ./dags:/mnt/kubernetes/dags:ro
+    - ./volumes/logs:/mnt/kubernetes/logs:rw
+    - ./volumes/kubeconfig:/root/.kube/config:rw
+    - ./volumes/config/daemon.json:/etc/docker/daemon.json:ro
+    - ./volumes/config/airflow.worker.cfg:/mnt/kubernetes/airflow-config/airflow.cfg:ro
+    stop_grace_period: 1s
+    depends_on:
+    - dns
+    - registry
+
+  web:
+    <<: *ref_airflow_image
+    <<: *ref_airflow_common
+    container_name: airflow-web
+    command:
+    - "bash"
+    - "-c"
+    - |
+      airflow initdb
+      exec airflow webserver
+    ports:
+    - "8080:8080"
+    depends_on:
+    - postgres
+    restart: on-failure
+
+  scheduler:
+    <<: *ref_airflow_image
+    <<: *ref_airflow_common
+    container_name: airflow-scheduler
+    command:
+    - "airflow"
+    - "scheduler"
+    depends_on:
+    - postgres
+    - web
+    - kubernetes
+    restart: on-failure
+
+volumes:
+  postgres-airflow: {}
+
+networks:
+  default:
+    name: airflow
+    ipam:
+      config:
+        - subnet: 10.254.254.0/24
